@@ -1,30 +1,24 @@
 const express = require("express");
-const multer = require("multer");
-const multerS3 = require("multer-s3");
-const fs = require("fs");
 const path = require("path");
 const cors = require("cors");
 const Busboy = require("busboy");
 const { S3, GetObjectCommand } = require("@aws-sdk/client-s3");
-const { PassThrough } = require("stream");
 const { connectDB } = require("./helpers/MongoHelper");
-// const { s3 } = require("./helpers/S3Helper")
+const {allowedMimeTypes, allowedExtensions} = require("./constants/FileConstants")
 const Files = require("./models/FileSchema");
-const uuid = require("uuid");
 
 require("dotenv").config();
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT;
 
-app.use(express.urlencoded({ extended: true, limit: "2000mb" }));
-app.use(express.json({ limit: "2000mb" }));
+app.use(express.urlencoded({ extended: true, limit: "200mb" }));
+app.use(express.json({ limit: "200mb" }));
 
 app.use(cors());
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-const MAX_SIZE = 500 * 1024 * 1024; // 50MB
+const MAX_SIZE = 500 * 1024 * 1024;
 const s3 = new S3({
-  region: "ap-south-1",
+  region: process.env.S3_BUCKET_REGION,
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
@@ -44,7 +38,7 @@ const main = async () => {
         })
       );
     } catch (error) {
-      console.error("Error fetching files:", error);
+      console.log("Error fetching files:", error);
       res.status(500).json({ error: "Failed to fetch files" });
     }
   });
@@ -66,16 +60,6 @@ const main = async () => {
         fileName = customFilename
           ? `${customFilename}${path.extname(originalname.filename)}`
           : originalname.filename;
-        console.log(fileName, originalname, originalname.mimeType);
-        const allowedMimeTypes = [
-          "image/png",
-          "image/jpeg",
-          "text/plain",
-          "application/json",
-        ];
-
-        const allowedExtensions = [".png", ".jpeg", ".jpg", ".txt", ".json"];
-
         const fileExt = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
         if (
           !allowedMimeTypes.includes(originalname.mimeType) ||
@@ -101,7 +85,7 @@ const main = async () => {
           const s3Key = `uploads/${Date.now()}_${fileName}`;
           try {
             await s3.putObject({
-              Bucket: "myfilesbucketv1",
+              Bucket: process.env.S3_BUCKET_NAME,
               Key: s3Key,
               Body: buffer,
               ContentLength: totalBytes,
@@ -110,7 +94,7 @@ const main = async () => {
             await Files.insertOne({ s3Key, filename: fileName });
             res.status(200).json({ message: "Upload successful" });
           } catch (err) {
-            console.error("S3 Upload error:", err);
+            console.log("S3 Upload error:", err);
             res.status(500).json({ error: "Upload failed" });
           }
         });
@@ -118,43 +102,43 @@ const main = async () => {
 
       req.pipe(busboy);
     } catch (err) {
-      console.error("S3 Upload error:", err);
+      console.log("S3 Upload error:", err);
       res.status(500).json({ error: "Upload failed" });
     }
   });
 
   app.get("/api/download", async (req, res) => {
-    const key = req?.query?.key;
-    const mode = req?.query?.mode || "download"; // default is download
-
-    if (!key) return res.status(400).send("Missing file key");
-
     try {
-      const command = new GetObjectCommand({
-        Bucket: process.env.S3_BUCKET_NAME,
-        Key: key,
-      });
+      const key = req?.query?.key;
+      const mode = req?.query?.mode || "download";
 
-      const data = await s3.send(command);
-      const stream = data.Body;
+      if (!key) return res.status(400).send("Missing file key");
 
-      const contentType = data.ContentType || "application/octet-stream";
-      const filename = key.split("/").pop();
-
-      res.setHeader("Content-Type", contentType);
-
-      if (mode === "view") {
-        res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-      } else {
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${filename}"`
-        );
+      try {
+        const command = new GetObjectCommand({
+          Bucket: process.env.S3_BUCKET_NAME,
+          Key: key,
+        });
+        const data = await s3.send(command);
+        const stream = data.Body;
+        const contentType = data.ContentType || "application/octet-stream";
+        const filename = key.split("/").pop();
+        res.setHeader("Content-Type", contentType);
+        if (mode === "view") {
+          res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+        } else {
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${filename}"`
+          );
+        }
+        stream.pipe(res);
+      } catch (err) {
+        console.log("Error streaming S3 file:", err);
+        res.status(500).send("Error downloading/viewing file");
       }
-
-      stream.pipe(res);
-    } catch (err) {
-      console.error("Error streaming S3 file:", err);
+    } catch (error) {
+      console.log("Error streaming S3 file:", err);
       res.status(500).send("Error downloading/viewing file");
     }
   });

@@ -37,17 +37,16 @@ export default function HomePage() {
     }
   };
 
-  // 👇 This effect runs once when the component mounts (resets state)
   useEffect(() => {
     setFiles([]);
     setSkip(0);
     setHasMore(true);
     setLoading(false);
 
-    fetchFiles(0, true); // start fresh
+    fetchFiles(0, true);
   }, []);
 
-  // 👇 This handles scroll event
+
   useEffect(() => {
     const handleScroll = () => {
       if (

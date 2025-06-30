@@ -5,27 +5,37 @@ import axios from "axios";
 export default function UploadPage() {
   const [file, setFile] = useState(null);
   const [fileName, setFileName] = useState("");
-  const [message, setMessage] = useState(""); ;
+  const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleUpload = async () => {
     if (!file) return;
     const formData = new FormData();
-    formData.append("filename", fileName); // Optional: Send custom name
+    formData.append("filename", fileName);
     formData.append("file", file);
 
     try {
-      const res = await axios.post("http://localhost:3001/api/upload", formData, {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
-      });
+      setLoading(true);
+      setMessage("");
       setErrorMessage("");
+
+      const res = await axios.post(
+        "http://localhost:3001/api/upload",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+        }
+      );
+
       setMessage(res.data.message);
     } catch (err) {
-      setMessage("")
       setErrorMessage(err?.response?.data?.error || err.message);
       console.error(err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -62,9 +72,14 @@ export default function UploadPage() {
 
         <button
           onClick={handleUpload}
-          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg transition duration-300"
+          disabled={loading}
+          className={`w-full font-semibold py-2 rounded-lg transition duration-300 ${
+            loading
+              ? "bg-gray-400 cursor-not-allowed"
+              : "bg-blue-600 hover:bg-blue-700 text-white"
+          }`}
         >
-          Upload
+          {loading ? "Uploading..." : "Upload"}
         </button>
 
         {message && (
