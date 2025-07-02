@@ -11,6 +11,10 @@ export default function UploadPage() {
 
   const handleUpload = async () => {
     if (!file) return;
+    if (file.size > 500 * 1024 * 1024) {
+      alert("File exceeds 500MB limit");
+      return;
+    }
     const formData = new FormData();
     formData.append("filename", fileName);
     formData.append("file", file);

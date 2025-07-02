@@ -7,7 +7,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
 
-  const LIMIT = 10;
+  const LIMIT = 20;
 
   const fetchFiles = async (currentSkip = 0, reset = false) => {
     if (loading || !hasMore) return;

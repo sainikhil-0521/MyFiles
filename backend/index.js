@@ -2,10 +2,12 @@ const express = require("express");
 const path = require("path");
 const cors = require("cors");
 const Busboy = require("busboy");
-const { S3, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { S3, GetObjectCommand, S3Client } = require("@aws-sdk/client-s3");
 const { connectDB } = require("./helpers/MongoHelper");
 const {allowedMimeTypes, allowedExtensions} = require("./constants/FileConstants")
 const Files = require("./models/FileSchema");
+const { PassThrough } = require("stream");
+const { Upload } = require("@aws-sdk/lib-storage");
 
 require("dotenv").config();
 const app = express();
@@ -30,7 +32,7 @@ const main = async () => {
   app.get("/api/files", async (req, res) => {
     try {
       const skip = parseInt(req.query.skip) || 0;
-      const limit = parseInt(req.query.limit) || 10;
+      const limit = parseInt(req.query.limit) || 20;
       const allFiles = await Files.find({}).sort({ createdAt: -1 }).skip(skip).limit(limit);
       res.json(
         allFiles.map((record) => {
@@ -47,66 +49,85 @@ const main = async () => {
     try {
       const busboy = Busboy({ headers: req.headers });
       let customFilename = null;
-      let totalBytes = 0;
-      let uploadAborted = false;
       let fileName = null;
-      let fileBuffer = [];
-      console.log(req.body);
+      let uploadPromise = null;
+      let uploadAborted = false;
+
       busboy.on("field", (fieldname, val) => {
         if (fieldname === "filename") customFilename = val;
       });
 
-      busboy.on("file", (fieldname, file, originalname) => {
+      busboy.on("file", (fieldname, file, info) => {
+        const { filename, mimeType } = info;
         fileName = customFilename
-          ? `${customFilename}${path.extname(originalname.filename)}`
-          : originalname.filename;
-        const fileExt = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
+          ? `${customFilename}${path.extname(filename)}`
+          : filename;
+
+        const fileExt = path.extname(fileName).toLowerCase();
         if (
-          !allowedMimeTypes.includes(originalname.mimeType) ||
+          !allowedMimeTypes.includes(mimeType) ||
           !allowedExtensions.includes(fileExt)
         ) {
-          return res.status(400).json({
+          res.status(400).json({
             error: "Only .png, .jpeg, .jpg, .txt, and .json files are allowed.",
           });
+          uploadAborted = true;
+          file.resume();
+          return;
         }
+
+        const passThrough = new PassThrough();
+        const s3Key = `uploads/${Date.now()}_${fileName}`;
+
+        uploadPromise = new Upload({
+          client: new S3Client({ region: process.env.S3_BUCKET_REGION }),
+          params: {
+            Bucket: process.env.S3_BUCKET_NAME,
+            Key: s3Key,
+            Body: passThrough,
+            ContentType: mimeType,
+          },
+        });
+
+        let totalBytes = 0;
+
         file.on("data", (chunk) => {
           totalBytes += chunk.length;
           if (totalBytes > MAX_SIZE) {
             uploadAborted = true;
-            return res.status(413).json({ error: "File exceeds 500MB limit" });
+            file.unpipe(passThrough);
+            passThrough.end();
+            res.status(413).json({ error: "File exceeds 500MB limit" });
+            return;
           }
-          fileBuffer.push(chunk);
+          passThrough.write(chunk);
         });
 
         file.on("end", async () => {
+          passThrough.end();
           if (uploadAborted) return;
 
-          const buffer = Buffer.concat(fileBuffer);
-          const s3Key = `uploads/${Date.now()}_${fileName}`;
           try {
-            await s3.putObject({
-              Bucket: process.env.S3_BUCKET_NAME,
-              Key: s3Key,
-              Body: buffer,
-              ContentLength: totalBytes,
-              ContentType: originalname.mimeType,
-            });
+            await uploadPromise.done();
             await Files.insertOne({ s3Key, filename: fileName });
             res.status(200).json({ message: "Upload successful" });
           } catch (err) {
-            console.log("S3 Upload error:", err);
-            res.status(500).json({ error: "Upload failed" });
+            console.error("Upload failed:", err);
+            if (!res.headersSent) {
+              res.status(500).json({ error: "Upload failed" });
+            }
           }
         });
       });
 
       req.pipe(busboy);
     } catch (err) {
-      console.log("S3 Upload error:", err);
-      res.status(500).json({ error: "Upload failed" });
+      console.error("Unexpected error:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Unexpected error occurred" });
+      }
     }
   });
-
   app.get("/api/download", async (req, res) => {
     try {
       const key = req?.query?.key;
